@@ -396,11 +396,29 @@ tr:hover .delete-btn{opacity:1}
       </div>
     </div>
 
-    <!-- ── PRO: AI Insights (Locked) ────────────────────────────────── -->
-    <div class="card feature-locked" onclick="showUpgradeModal()">
-      <div class="card-content">
-        <h2>🤖 AI Spending Insights</h2>
-        <p style="color:var(--muted);font-size:13px">Get personalized tips on where to save, spending patterns, and budget recommendations.</p>
+    <!-- ── AI Insights (Working — 1 free insight per visit) ───────── -->
+    <div class="card card-full">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:16px">
+        <div>
+          <h2 style="margin:0">🤖 AI Spending Insights</h2>
+          <p style="color:var(--muted);font-size:12px;margin-top:2px">Personalized tips on where to save based on your data</p>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <span id="insightCount" style="font-size:12px;color:var(--muted)"></span>
+          <button class="btn btn-primary btn-sm" onclick="getNewInsight()">💡 New Insight</button>
+        </div>
+      </div>
+      <div id="aiInsight" style="display:none;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:12px"></div>
+      <div id="aiUpsell" style="display:none;background:linear-gradient(135deg,rgba(124,58,237,.08),rgba(37,99,235,.08));border:1px solid rgba(124,58,237,.25);border-radius:10px;padding:14px 18px;margin-bottom:16px;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+        <div>
+          <span style="font-size:13px;font-weight:600;color:var(--text)">🔒 Free plan: 1 insight per visit</span>
+          <span style="font-size:12px;color:var(--muted);margin-left:6px">Upgrade for unlimited insights + predictions</span>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="showUpgradeModal()" style="white-space:nowrap">Upgrade Pro — $4.99/mo</button>
+      </div>
+      <div class="empty-state" id="aiEmpty">
+        <div class="icon">🤖</div>
+        <p>Add some transactions first, then click "New Insight" to get personalized spending tips!</p>
       </div>
     </div>
 
@@ -515,9 +533,10 @@ tr:hover .delete-btn{opacity:1}
           <li>CSV & JSON export</li>
           <li>Recurring rules (3 max)</li>
           <li>Budget goal (1 max)</li>
+          <li>1 AI insight per visit</li>
           <li class="disabled">Cloud sync</li>
           <li class="disabled">Unlimited recurring</li>
-          <li class="disabled">AI insights</li>
+          <li class="disabled">Unlimited AI insights</li>
           <li class="disabled">Unlimited budget goals</li>
           <li class="disabled">Multi-device</li>
         </ul>
@@ -1095,6 +1114,173 @@ function renderBudgets() {
       </div>
     </div>`;
   }).join('');
+}
+
+// ── AI Spending Insights ──
+let insightUsed = false;
+
+function generateInsight() {
+  const expenses = transactions.filter(t => t.type === 'expense');
+  if (expenses.length === 0) return null;
+
+  const totalExpense = expenses.reduce((s, t) => s + t.amount, 0);
+  const totalIncome = transactions.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+  const now = new Date();
+  const month = now.toISOString().slice(0, 7);
+  const monthExpenses = expenses.filter(t => t.date.startsWith(month));
+  const monthTotal = monthExpenses.reduce((s, t) => s + t.amount, 0);
+
+  // Category breakdown
+  const catTotals = {};
+  expenses.forEach(t => { catTotals[t.category] = (catTotals[t.category] || 0) + t.amount; });
+  const sortedCats = Object.entries(catTotals).sort((a, b) => b[1] - a[1]);
+  const topCat = sortedCats[0];
+  const topCatPct = ((topCat[1] / totalExpense) * 100).toFixed(0);
+
+  // Daily average
+  const uniqueDays = [...new Set(expenses.map(t => t.date))];
+  const avgDaily = totalExpense / Math.max(uniqueDays.length, 1);
+
+  // Weekend vs weekday
+  let weekendSpend = 0, weekdaySpend = 0, weekendCount = 0, weekdayCount = 0;
+  expenses.forEach(t => {
+    const d = new Date(t.date + 'T00:00:00').getDay();
+    if (d === 0 || d === 6) { weekendSpend += t.amount; weekendCount++; }
+    else { weekdaySpend += t.amount; weekdayCount++; }
+  });
+  const avgWeekend = weekendCount > 0 ? weekendSpend / weekendCount : 0;
+  const avgWeekday = weekdayCount > 0 ? weekdaySpend / weekdayCount : 0;
+
+  // Biggest single expense
+  const biggest = expenses.reduce((max, t) => t.amount > max.amount ? t : max, expenses[0]);
+
+  // Savings rate
+  const savingsRate = totalIncome > 0 ? (((totalIncome - totalExpense) / totalIncome) * 100).toFixed(0) : 0;
+
+  // Recent trend (last 7 days vs previous 7 days)
+  const today = now.toISOString().slice(0, 10);
+  const d7 = new Date(now); d7.setDate(d7.getDate() - 7);
+  const d14 = new Date(now); d14.setDate(d14.getDate() - 14);
+  const recent7 = expenses.filter(t => t.date >= d7.toISOString().slice(0, 10) && t.date <= today).reduce((s, t) => s + t.amount, 0);
+  const prev7 = expenses.filter(t => t.date >= d14.toISOString().slice(0, 10) && t.date < d7.toISOString().slice(0, 10)).reduce((s, t) => s + t.amount, 0);
+
+  // Build insights pool
+  const insights = [];
+
+  if (topCatPct > 30) {
+    insights.push({
+      icon: CATEGORY_ICONS[topCat[0]] || '📊',
+      title: `${CATEGORY_ICONS[topCat[0]] || ''} ${topCat[0]} is your biggest expense`,
+      text: `You've spent $${topCat[1].toFixed(2)} on ${topCat[0]} — that's ${topCatPct}% of your total spending. Consider setting a budget goal for this category.`,
+      color: CATEGORY_COLORS[topCat[0]] || '#8b949e'
+    });
+  }
+
+  if (avgWeekend > avgWeekday * 1.3 && weekendCount > 2) {
+    insights.push({
+      icon: '📅',
+      title: 'Weekend spending is higher than weekdays',
+      text: `You spend $${avgWeekend.toFixed(2)} per weekend transaction vs $${avgWeekday.toFixed(2)} on weekdays. That's ${((avgWeekend / avgWeekday - 1) * 100).toFixed(0)}% more. Try planning weekend activities on a budget!`,
+      color: 'var(--orange)'
+    });
+  }
+
+  if (savingsRate < 20 && totalIncome > 0) {
+    insights.push({
+      icon: '⚠️',
+      title: 'Your savings rate could be higher',
+      text: `You're saving ${savingsRate}% of your income. Financial experts recommend 20%+. Consider reducing spending in your top category (${topCat[0]}).`,
+      color: 'var(--red)'
+    });
+  } else if (savingsRate >= 20 && totalIncome > 0) {
+    insights.push({
+      icon: '🎉',
+      title: 'Great savings rate!',
+      text: `You're saving ${savingsRate}% of your income — that's above the recommended 20%. Keep up the excellent financial discipline!`,
+      color: 'var(--green)'
+    });
+  }
+
+  if (recent7 > prev7 * 1.2 && prev7 > 0) {
+    insights.push({
+      icon: '📈',
+      title: 'Spending is trending up',
+      text: `Your last 7 days ($${recent7.toFixed(2)}) are ${((recent7 / prev7 - 1) * 100).toFixed(0)}% higher than the previous week ($${prev7.toFixed(2)}). Keep an eye on your spending!`,
+      color: 'var(--red)'
+    });
+  } else if (recent7 < prev7 * 0.8 && prev7 > 0) {
+    insights.push({
+      icon: '📉',
+      title: 'Spending is trending down — nice!',
+      text: `Your last 7 days ($${recent7.toFixed(2)}) are ${((1 - recent7 / prev7) * 100).toFixed(0)}% lower than the previous week ($${prev7.toFixed(2)}). You're on the right track!`,
+      color: 'var(--green)'
+    });
+  }
+
+  insights.push({
+    icon: '💰',
+    title: `Average daily spend: $${avgDaily.toFixed(2)}`,
+    text: `Based on ${uniqueDays.length} active days, you spend about $${avgDaily.toFixed(2)} per day. At this rate, that's $${(avgDaily * 30).toFixed(2)}/month.`,
+    color: 'var(--blue)'
+  });
+
+  if (biggest.amount > avgDaily * 3) {
+    insights.push({
+      icon: '🔍',
+      title: `Biggest expense: $${biggest.amount.toFixed(2)}`,
+      text: `"${biggest.description}" on ${formatDate(biggest.date)} was ${((biggest.amount / avgDaily)).toFixed(1)}x your daily average. Was this a one-time purchase?`,
+      color: 'var(--pink)'
+    });
+  }
+
+  if (sortedCats.length >= 3) {
+    const midCats = sortedCats.slice(0, 3);
+    insights.push({
+      icon: '📊',
+      title: 'Your top 3 categories',
+      text: midCats.map(([c, v]) => `${CATEGORY_ICONS[c] || ''} ${c}: $${v.toFixed(2)} (${((v / totalExpense) * 100).toFixed(0)}%)`).join(' · '),
+      color: 'var(--accent)'
+    });
+  }
+
+  // Pick a random insight that hasn't been shown this session
+  if (insights.length === 0) return null;
+  const idx = Math.floor(Math.random() * insights.length);
+  return insights[idx];
+}
+
+function getNewInsight() {
+  if (transactions.filter(t => t.type === 'expense').length === 0) {
+    showToast('⚠️ Add some transactions first!');
+    return;
+  }
+
+  if (insightUsed) {
+    showToast('🔒 Free plan: 1 insight per visit. Upgrade for unlimited!');
+    document.getElementById('aiUpsell').style.display = 'flex';
+    return;
+  }
+
+  const insight = generateInsight();
+  if (!insight) { showToast('⚠️ Not enough data for insights yet'); return; }
+
+  insightUsed = true;
+  document.getElementById('aiEmpty').style.display = 'none';
+  document.getElementById('aiUpsell').style.display = 'flex';
+  document.getElementById('insightCount').textContent = '1/1 free insight';
+
+  const el = document.getElementById('aiInsight');
+  el.style.display = 'block';
+  el.innerHTML = `
+    <div style="display:flex;align-items:flex-start;gap:14px">
+      <span style="font-size:28px;line-height:1">${insight.icon}</span>
+      <div style="flex:1">
+        <div style="font-weight:600;font-size:15px;margin-bottom:6px;color:${insight.color}">${escapeHtml(insight.title)}</div>
+        <p style="color:var(--muted);font-size:13px;line-height:1.5;margin:0">${escapeHtml(insight.text)}</p>
+      </div>
+    </div>
+  `;
+  showToast('🤖 Insight generated!');
 }
 
 // Show Pro banner only after user has 10+ transactions (better conversion)
